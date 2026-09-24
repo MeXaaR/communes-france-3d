@@ -33,6 +33,7 @@ import { SectorCache, surroundingSectors, ownedFeatures, type Sector } from './s
 import { ModelPool } from './model-pool';
 import { clip, type ModelResult } from './model';
 import { network as networkStats, fetchJson } from './network';
+import { persistentCache, clearPersistentData } from './persistent-cache';
 import './style.css';
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 document.querySelector('#app')!.innerHTML = `
@@ -44,9 +45,9 @@ document.querySelector('#app')!.innerHTML = `
  <div class="layers"><label class="toggle"><span><i class="dot green"></i>Bâtiments et arbres en 3D</span><input id="details" type="checkbox" checked></label><label class="toggle"><span><i class="dot"></i>Parcelles cadastrales</span><input id="parcels" type="checkbox"></label><label class="toggle"><span><i class="dot purple"></i>Urbanisme · PLU / PLUi</span><input id="urbanism" type="checkbox"></label><label class="toggle"><span>Photographie aérienne</span><input id="ortho" type="checkbox"></label></div>
  <div id="legend" class="legend" hidden><span style="--c:#ca737c">U</span><span style="--c:#e7ad65">AU</span><span style="--c:#ead782">A</span><span style="--c:#81b08b">N</span></div>
  <div class="actions"><button id="extent">Toute la commune</button><button id="center">Le centre</button><button id="help-button" aria-label="Aide et sources">?</button></div><div id="status" class="status" role="status" aria-live="polite"></div></div></aside>
- <aside class="help panel" id="help" hidden><h2>Explorer le territoire</h2><p>Faites glisser pour vous déplacer. Utilisez la molette ou deux doigts pour zoomer. Pour tourner et incliner : clic droit + glisser, ou Ctrl + glisser. La boussole rétablit le nord.</p><p>Les détails arrivent autour de la vue. Rapprochez-vous pour voir les arbres et les toitures. Sur mobile, utilisez deux doigts pour tourner et incliner.</p><p>Les emprises et hauteurs viennent de l’IGN. Les toitures, fenêtres et arbres sont des représentations indicatives, pas un relevé architectural. Les hauteurs absentes ne sont pas inventées.</p><p>Les zones d’urbanisme sont récupérées à la consultation. Cliquez sur une zone pour accéder au document officiel. Une zone absente du service ne signifie pas qu’elle est sans règles.</p><p><a href="https://geoservices.ign.fr/" target="_blank" rel="noopener">IGN · BD TOPO, CoSIA, RGE ALTI / LiDAR HD</a><br><a href="https://www.geoportail-urbanisme.gouv.fr/" target="_blank" rel="noopener">Géoportail de l’urbanisme</a> · <a href="https://geo.api.gouv.fr/" target="_blank" rel="noopener">API Découpage administratif</a></p><p>Aucune donnée de terrain n’est hébergée ici. Les données transitent directement des services publics vers votre navigateur. Licence Ouverte pour les données IGN ouvertes.</p></aside>
+ <aside class="help panel" id="help" hidden><h2>Explorer le territoire</h2><p>Faites glisser pour vous déplacer. Utilisez la molette ou deux doigts pour zoomer. Pour tourner et incliner : clic droit + glisser, ou Ctrl + glisser. La boussole rétablit le nord.</p><p>Les détails arrivent autour de la vue. Rapprochez-vous pour voir les arbres et les toitures. Sur mobile, utilisez deux doigts pour tourner et incliner.</p><p>Les emprises et hauteurs viennent de l’IGN. Les toitures, fenêtres et arbres sont des représentations indicatives, pas un relevé architectural. Les hauteurs absentes ne sont pas inventées.</p><p>Les zones d’urbanisme sont récupérées à la consultation. Cliquez sur une zone pour accéder au document officiel. Une zone absente du service ne signifie pas qu’elle est sans règles.</p><p><a href="https://geoservices.ign.fr/" target="_blank" rel="noopener">IGN · BD TOPO, CoSIA, RGE ALTI / LiDAR HD</a><br><a href="https://www.geoportail-urbanisme.gouv.fr/" target="_blank" rel="noopener">Géoportail de l’urbanisme</a> · <a href="https://geo.api.gouv.fr/" target="_blank" rel="noopener">API Découpage administratif</a></p><p>Les secteurs visités sont conservés dans ce navigateur pendant sept jours, dans la limite de 256 Mo (80 Mo sur mobile). Le bouton « Effacer les données » supprime cette sauvegarde ; la carte ouverte reste utilisable et la sauvegarde reprend au prochain chargement. Le PLU est consulté en direct. Aucune donnée de terrain n’est hébergée ici. Les données transitent directement des services publics vers votre navigateur. Licence Ouverte pour les données IGN ouvertes.</p></aside>
  <aside class="info panel" id="info" hidden></aside><div class="footer" id="caption">Relief réel · données publiques · exploration progressive</div>
- <div id="loading" class="loading"><strong>La France, en relief.</strong><small id="boot-status">Chargement du catalogue des communes…</small></div>`;
+ <div id="cache-feedback" class="cache-feedback" role="status" aria-live="polite"></div><div id="loading" class="loading"><strong>La France, en relief.</strong><small id="boot-status">Chargement du catalogue des communes…</small></div>`;
 const statuses = new Map<string, { text: string; error?: boolean; pending?: boolean }>();
 function status(key: string, text: string, error = false, pending = false) {
   statuses.set(key, { text, error, pending });
@@ -472,67 +473,81 @@ async function refreshSector(_force = false) {
       const entry = await tileModels.get(
         tile.key,
         () =>
-          boundedWork(async () => {
-            signal.throwIfAborted();
-            if (!activeSectorKeys.has(tile.key))
-              throw new DOMException('Secteur hors de la vue', 'AbortError');
-            const padding = 25,
-              b: Bounds = [
-                tile.projected[0] - padding,
-                tile.projected[1] - padding,
-                tile.projected[2] + padding,
-                tile.projected[3] + padding,
-              ];
-            const [raw, covers, ground] = await Promise.all([
-              wfs(
-                'BDTOPO_V3:batiment',
-                [...lngLat(b[0], b[1]), ...lngLat(b[2], b[3])] as Bounds,
-                signal,
-              ),
-              coverForBounds(b, signal).catch(() => {
+          persistentCache.remember(
+            `model/${t.code}/${mobileDevice ? 'mobile' : 'desktop'}/${tile.key}`,
+            () =>
+              boundedWork(async () => {
                 signal.throwIfAborted();
-                return [];
-              }),
-              groundForBounds(tile.projected, signal),
-            ]);
-            const obstacles = normalizeBuildings(raw),
-              buildings = ownedFeatures(obstacles, tile);
-            const needsForest =
-              !covers.length || covers.some((c) => c.known / c.classes.length < 0.9);
-            const forests = needsForest
-              ? await wfs('BDTOPO_V3:zone_de_vegetation', tile.geographic, signal).catch(() => {
-                  signal.throwIfAborted();
-                  return empty();
-                })
-              : empty();
-            forests.features = forests.features.filter((f) =>
-              /bois|forêt|foret|peupleraie|mangrove/i.test(String(f.properties?.nature ?? '')),
-            );
-            const result = await modelPool.run(
-              {
-                buildings,
-                obstacles,
-                boundary: t.boundary,
-                origin: tile.origin,
-                bounds: tile.projected,
-                covers,
-                ground,
-                forests,
-                limit: mobileDevice ? 220 : 600,
-                treeLimit: mobileDevice ? 330 : 900,
-                maxVertices: mobileDevice ? 100000 : 350000,
-              },
-              signal,
-            );
-            signal.throwIfAborted();
-            return {
-              tile,
-              buildings: result.buildings,
-              model: result.model,
-              terrain: { min: Math.min(...ground.values), max: Math.max(...ground.values) },
-              cover: covers.some((c) => c.known) ? 'CoSIA' : 'BD TOPO',
-            };
-          }, signal),
+                if (!activeSectorKeys.has(tile.key))
+                  throw new DOMException('Secteur hors de la vue', 'AbortError');
+                const padding = 25,
+                  b: Bounds = [
+                    tile.projected[0] - padding,
+                    tile.projected[1] - padding,
+                    tile.projected[2] + padding,
+                    tile.projected[3] + padding,
+                  ];
+                const [raw, covers, ground] = await Promise.all([
+                  wfs(
+                    'BDTOPO_V3:batiment',
+                    [...lngLat(b[0], b[1]), ...lngLat(b[2], b[3])] as Bounds,
+                    signal,
+                  ),
+                  coverForBounds(b, signal).catch(() => {
+                    signal.throwIfAborted();
+                    return [];
+                  }),
+                  groundForBounds(tile.projected, signal),
+                ]);
+                const obstacles = normalizeBuildings(raw),
+                  buildings = ownedFeatures(obstacles, tile);
+                const needsForest =
+                  !covers.length || covers.some((c) => c.known / c.classes.length < 0.9);
+                const forests = needsForest
+                  ? await wfs('BDTOPO_V3:zone_de_vegetation', tile.geographic, signal).catch(() => {
+                      signal.throwIfAborted();
+                      return empty();
+                    })
+                  : empty();
+                forests.features = forests.features.filter((f) =>
+                  /bois|forêt|foret|peupleraie|mangrove/i.test(String(f.properties?.nature ?? '')),
+                );
+                const result = await modelPool.run(
+                  {
+                    buildings,
+                    obstacles,
+                    boundary: t.boundary,
+                    origin: tile.origin,
+                    bounds: tile.projected,
+                    covers,
+                    ground,
+                    forests,
+                    limit: mobileDevice ? 220 : 600,
+                    treeLimit: mobileDevice ? 330 : 900,
+                    maxVertices: mobileDevice ? 100000 : 350000,
+                  },
+                  signal,
+                );
+                signal.throwIfAborted();
+                return {
+                  tile,
+                  buildings: result.buildings,
+                  model: result.model,
+                  terrain: { min: Math.min(...ground.values), max: Math.max(...ground.values) },
+                  cover: covers.some((c) => c.known) ? 'CoSIA' : 'BD TOPO',
+                };
+              }, signal),
+            (entry) =>
+              entry.model.positions.byteLength +
+              entry.model.colors.byteLength +
+              JSON.stringify({
+                buildings: entry.buildings,
+                trees: entry.model.trees,
+                spans: entry.model.spans,
+              }).length *
+                2,
+            signal,
+          ),
         (entry) =>
           entry.model.positions.byteLength * 6 +
           entry.model.trees.length * 700 +
@@ -642,31 +657,37 @@ async function refreshParcels(_force = false) {
       await tileParcels.get(
         tile.key,
         () =>
-          boundedWork(async () => {
-            signal.throwIfAborted();
-            if (!activeParcelKeys.has(tile.key))
-              throw new DOMException('Secteur hors de la vue', 'AbortError');
-            const raw = await wfs(
-                'CADASTRALPARCELS.PARCELLAIRE_EXPRESS:parcelle',
-                tile.geographic,
-                signal,
-              ),
-              // Large rural parcels can extend beyond the loaded sectors: keep full intersecting
-              // footprints and deduplicate by cadastral ID when publishing the cache.
-              result = clip(raw, t.boundary);
-            result.features = result.features.map((f) => ({
-              ...f,
-              id: String(f.properties?.idu ?? f.id ?? f.properties?.gid),
-              properties: {
-                ...f.properties,
-                parcelLabel:
-                  f.properties?.numero == null || f.properties.numero === ''
-                    ? ''
-                    : String(f.properties.numero).padStart(4, '0'),
-              },
-            }));
-            return result;
-          }, signal),
+          persistentCache.remember(
+            `parcels/${t.code}/${tile.key}`,
+            () =>
+              boundedWork(async () => {
+                signal.throwIfAborted();
+                if (!activeParcelKeys.has(tile.key))
+                  throw new DOMException('Secteur hors de la vue', 'AbortError');
+                const raw = await wfs(
+                    'CADASTRALPARCELS.PARCELLAIRE_EXPRESS:parcelle',
+                    tile.geographic,
+                    signal,
+                  ),
+                  // Large rural parcels can extend beyond the loaded sectors: keep full intersecting
+                  // footprints and deduplicate by cadastral ID when publishing the cache.
+                  result = clip(raw, t.boundary);
+                result.features = result.features.map((f) => ({
+                  ...f,
+                  id: String(f.properties?.idu ?? f.id ?? f.properties?.gid),
+                  properties: {
+                    ...f.properties,
+                    parcelLabel:
+                      f.properties?.numero == null || f.properties.numero === ''
+                        ? ''
+                        : String(f.properties.numero).padStart(4, '0'),
+                  },
+                }));
+                return result;
+              }, signal),
+            (c) => JSON.stringify(c).length * 2,
+            signal,
+          ),
         (c) => JSON.stringify(c).length * 3,
       );
       signal.throwIfAborted();
@@ -916,6 +937,40 @@ async function boot() {
       canvasContextAttributes: { antialias: true },
     });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+    map.addControl(
+      {
+        onAdd() {
+          const control = document.createElement('div');
+          control.className = 'maplibregl-ctrl data-control';
+          const button = document.createElement('button');
+          button.id = 'clear-data';
+          button.textContent = 'Effacer les données';
+          button.title =
+            'Effacer les données de carte sauvegardées par cette application dans ce navigateur';
+          button.onclick = async () => {
+            button.disabled = true;
+            button.textContent = 'Effacement…';
+            try {
+              await clearPersistentData();
+              button.textContent = 'Données effacées';
+              $('cache-feedback').textContent =
+                'Données locales effacées. La sauvegarde reprendra au prochain chargement.';
+            } catch {
+              button.textContent = 'Réessayer l’effacement';
+              button.disabled = false;
+              $('cache-feedback').textContent =
+                'Le navigateur n’a pas permis l’effacement. Réessayez.';
+            }
+          };
+          control.append(button);
+          return control;
+        },
+        onRemove() {
+          $('clear-data')?.parentElement?.remove();
+        },
+      },
+      'bottom-right',
+    );
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
     await new Promise<void>((resolve) => map.once('style.load', () => resolve()));
     details = new Details();
@@ -952,6 +1007,7 @@ async function boot() {
     activeKeys: [...activeSectorKeys],
   }),
   settle: () => Promise.allSettled([refreshSector(), refreshParcels()]),
+  persistent: () => persistentCache.snapshot(),
   network: networkStats,
   rasters: rasterStats,
 };

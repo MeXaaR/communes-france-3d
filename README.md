@@ -80,3 +80,11 @@ Les données sont chargées chez leurs producteurs, donc un hébergement léger 
 Le rapport complet est dans [validation/RAPPORT.md](validation/RAPPORT.md), Les captures des dix communes et du mode mobile, ainsi que les rapports JSON, sont générés localement dans ce dossier et ne sont pas publiés. Les mesures de navigation et les vérifications du cache sont dans [validation/OPTIMISATION.md](validation/OPTIMISATION.md).
 
 Les règles de téléchargement des documents GPU sont décrites dans la [documentation officielle des services](https://www.geoportail-urbanisme.gouv.fr/services/?subcategory=services_api).
+
+## Cache local du navigateur
+
+Les secteurs visités sont sauvegardés dans IndexedDB : géométrie 3D préparée, bâtiments, arbres, rasters de relief et de couverture décodés, parcelles et contours administratifs. Au retour sur une commune ou après rechargement, ces données sont restaurées sans refaire les appels ni la génération correspondants. Le navigateur doit encore créer les objets graphiques et charger le fond de carte. Seuls les secteurs explorés sont sauvegardés, pas toute une grande commune à l’avance.
+
+Validité : sept jours. Budget estimé : 256 Mio sur ordinateur, 80 Mio sur petit écran. Les entrées anciennes sont supprimées à mesure que le budget est atteint. Les clés séparent les communes et les niveaux de détail mobile/ordinateur. `CACHE_NAME` doit changer si le format des données préparées change. Le PLU et la recherche restent consultés en direct. Le navigateur peut évincer son stockage ; si IndexedDB est indisponible ou plein, la carte continue via les services publics.
+
+Le bouton **Effacer les données**, près de l’information en bas à droite, vide uniquement la sauvegarde de cette application. La vue courante reste utilisable en mémoire ; les sauvegardes sont suspendues dans les onglets ouverts jusqu’à leur rechargement. Il ne vide pas le cache HTTP général du navigateur. Aucun serveur de stockage cartographique n’est ajouté.

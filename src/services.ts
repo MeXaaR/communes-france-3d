@@ -1,3 +1,4 @@
+import { persistentCache } from './persistent-cache';
 import type { Feature, FeatureCollection } from 'geojson';
 import { fetchJson } from './network';
 import { boxGeometry, boundsOf, type Area, type Bounds, normalize, safeUrl, empty } from './geo';
@@ -55,8 +56,18 @@ export function findCommunes(catalogue: Commune[], query: string): Commune[] {
     .slice(0, 15);
 }
 export async function getTerritory(commune: Commune, signal: AbortSignal): Promise<Territory> {
-  const data = await fetchJson(
-    `https://geo.api.gouv.fr/communes/${commune.code}?fields=nom,code,contour,mairie,centre&format=json&geometry=contour`,
+  const data = await persistentCache.remember(
+    `boundary/${commune.code}`,
+    async () => {
+      const value = await fetchJson(
+        `https://geo.api.gouv.fr/communes/${commune.code}?fields=nom,code,contour,mairie,centre&format=json&geometry=contour`,
+        signal,
+      );
+      if (!['Polygon', 'MultiPolygon'].includes(value.contour?.type))
+        throw Error('Contour communal indisponible');
+      return value;
+    },
+    (value) => JSON.stringify(value).length * 2,
     signal,
   );
   if (!['Polygon', 'MultiPolygon'].includes(data.contour?.type))

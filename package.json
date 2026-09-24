@@ -27,6 +27,7 @@
     "@types/geojson": "7946.0.16",
     "@types/node": "24.0.0",
     "@types/three": "0.185.0",
+    "fake-indexeddb": "^6.2.5",
     "prettier": "^3.9.8",
     "tsx": "^4.23.15",
     "typescript": "5.9.3",

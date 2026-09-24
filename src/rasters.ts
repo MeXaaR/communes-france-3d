@@ -1,3 +1,4 @@
+import { persistentCache } from './persistent-cache';
 import { addProtocol } from 'maplibre-gl';
 import { tileBounds, WORLD, type Bounds } from './geo';
 export interface CoverTile {
@@ -86,8 +87,17 @@ async function load(
   if (!task) {
     const control = new AbortController();
     const created = { control, users: 0, promise: null as unknown as Promise<Result> };
-    created.promise = workers[workerCursor++ % workers.length]
-      .request(type, z, x, y, control.signal)
+    created.promise = persistentCache
+      .remember<Result>(
+        `raster/${key}`,
+        () => workers[workerCursor++ % workers.length].request(type, z, x, y, control.signal),
+        (r) =>
+          r.buffer.byteLength +
+          (r.elevations?.byteLength ?? 0) +
+          (r.classes?.byteLength ?? 0) +
+          512,
+        control.signal,
+      )
       .then((result) => {
         cache.set(key, result);
         while (cache.size > 80) cache.delete(cache.keys().next().value!);
