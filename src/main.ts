@@ -657,6 +657,13 @@ async function refreshParcels(_force = false) {
             result.features = result.features.map((f) => ({
               ...f,
               id: String(f.properties?.idu ?? f.id ?? f.properties?.gid),
+              properties: {
+                ...f.properties,
+                parcelLabel:
+                  f.properties?.numero == null || f.properties.numero === ''
+                    ? ''
+                    : String(f.properties.numero).padStart(4, '0'),
+              },
             }));
             return result;
           }, signal),
@@ -741,7 +748,8 @@ function setupEvents() {
     map.triggerRepaint();
   };
   $('parcels').onchange = () => {
-    for (const id of ['parcels-fill', 'parcels-lines']) visible(id, checked('parcels'));
+    for (const id of ['parcels-fill', 'parcels-lines', 'parcels-labels'])
+      visible(id, checked('parcels'));
     if (checked('parcels')) void refreshParcels(true);
     else {
       parcelView++;
@@ -786,6 +794,19 @@ function setupEvents() {
   map.on('click', (e) => {
     if (!territory || !contains([e.lngLat.lng, e.lngLat.lat], territory.boundary)) return;
     const point = [e.lngLat.lng, e.lngLat.lat];
+    if (checked('parcels')) {
+      const label = map.queryRenderedFeatures(e.point, { layers: ['parcels-labels'] })[0];
+      const parcel =
+        label &&
+        currentParcels.features.find(
+          (f) => String(f.properties?.idu ?? f.id) === String(label.properties?.idu ?? label.id),
+        );
+      if (parcel) {
+        displayParcel(parcel);
+        return;
+      }
+    }
+
     if (checked('urbanism')) {
       const f = currentZones.features.find((f) => contains(point, f.geometry as Area));
       if (f) {
@@ -899,6 +920,7 @@ async function boot() {
     await new Promise<void>((resolve) => map.once('style.load', () => resolve()));
     details = new Details();
     map.addLayer(details);
+    map.moveLayer('parcels-labels');
     setupEvents();
     $('loading').hidden = true;
     diagnostics.ready = true;

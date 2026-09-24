@@ -29,7 +29,7 @@ Le dernier script met à jour uniquement le catalogue autorisé. Les tests de co
 - La carte s’ouvre près de la mairie. « Toute la commune » montre son périmètre. Les détails se chargent près de la vue lorsque l’on se rapproche.
 - Glisser pour déplacer la carte, molette pour zoomer. Clic droit ou Ctrl + glisser pour tourner et incliner. Sur écran tactile, utiliser deux doigts.
 - Le champ de lieu recherche une adresse, une rue, un hameau ou une parcelle sous la forme `AB 123`. Un résultat recentre la carte.
-- Activer les parcelles ou l’urbanisme, puis cliquer pour lire leurs attributs et ouvrir le règlement officiel lorsqu’il est disponible.
+- Activer les parcelles ou l’urbanisme, puis cliquer pour lire leurs attributs et ouvrir le règlement officiel lorsqu’il est disponible. Les numéros cadastraux (par exemple `0039`) sont affichés au centre des parcelles, sans la section ; cliquer sur un numéro ouvre la fiche de la parcelle, même lorsque le PLU est affiché.
 - Le paramètre `?commune=09182` ouvre directement Massat. Le lien garde la commune choisie.
 
 ## Données et fonctionnement
